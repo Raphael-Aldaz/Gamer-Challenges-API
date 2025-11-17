@@ -1,9 +1,21 @@
-import { Game, Platform, Type } from "@prisma/client"
+import { Game, Platform, Genre } from "@prisma/client"
 import { prismaClient } from "./index.js"
 import argon2 from "argon2"
 import axios from "axios"
 import { ur } from "zod/locales"
-const { game, type, platform, user, challenge, participation, participationLike, challengeLike } = prismaClient
+const {
+  media,
+  game,
+  genre,
+  platform,
+  user,
+  challenge,
+  participation,
+  participationLike,
+  challengeLike,
+  genreGame,
+  platformGame,
+} = prismaClient
 interface platformAPI {
   count: number
   next: string
@@ -19,21 +31,26 @@ interface typeAPI {
     },
   ]
 }
-interface GameResponseApi {
-  count: number
-  next: string
-  previous: string
-  results: Game[]
+interface RawgGame {
   id: number
-  title: string
-  short_description: string
-  thumbnail: string
-  genre: string
-  platform: string
+  name: string
+  released: string
+  background_image: string
+  metacritic: number
+  genres: Array<{ id: number; name: string; image_background: string }>
+  platforms: Array<{ platform: { id: number; name: string } }>
+}
+
+interface RawgGameDetails extends RawgGame {
+  description_raw: string
 }
 const hashedPassword = await argon2.hash("test")
 const RAWG_API_KEY = process.env.RAWG_KEY
 const RAWG_BASE_URL = "https://api.rawg.io/api"
+const GAMES_TO_FETCH = 500
+const GAMES_PER_REQUEST = 40 // Max par requête RAWG
+const DELAY_BETWEEN_REQUESTS = 1000
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 export const shuffleData = <T>(data: T[], count: number): T[] => {
   const shuffle = [...data]
   for (let index = shuffle.length - 1; index > 0; index--) {
@@ -42,13 +59,216 @@ export const shuffleData = <T>(data: T[], count: number): T[] => {
   }
   return shuffle.slice(0, count)
 }
+const createMediaFromUrl = async (url: string, name: string) => {
+  if (!url) return null
+  let mimetype = "image/jpeg"
+  let size = 0
+  const filename = url.split("/").pop() || `${name}.jpg`
+  try {
+    const res = await fetch(url, {
+      method: "HEAD",
+      signal: AbortSignal.timeout(5000),
+    })
+    const ct = res.headers.get("content-type")
+    const cl = res.headers.get("content-length")
+    if (ct) mimetype = ct
+    if (cl) size = parseInt(cl, 10)
+    const mediaResponse = await media.create({
+      data: {
+        filename,
+        original_name: name,
+        mimetype,
+        size,
+        path: url,
+      },
+    })
+
+    return mediaResponse.media_id
+  } catch (e) {
+    console.warn(`HEAD request failed for ${url}:`, e)
+    return null
+  }
+}
+const fetchGameList = async (pageSize: number, totalGames: number): Promise<RawgGame[]> => {
+  const games: RawgGame[] = []
+  let page = 1
+  const totalPages = Math.ceil(totalGames / pageSize)
+
+  console.log(`📥 Récupération de ${totalGames} jeux depuis RAWG...`)
+
+  while (games.length < totalGames) {
+    try {
+      const response = await axios.get(`${RAWG_BASE_URL}/games`, {
+        params: {
+          key: RAWG_API_KEY,
+          page,
+          page_size: pageSize,
+          ordering: "-metacritic,-rating", // Les mieux notés en premier
+          metacritic: "70,100",
+        },
+      })
+      const results = response.data.results || []
+      games.push(...results)
+      console.log(`   Page ${page}/${totalPages} - ${games.length}/${totalGames} jeux récupérés`)
+      page++
+      await sleep(DELAY_BETWEEN_REQUESTS)
+    } catch (error) {
+      console.error(`❌ Erreur page ${page}:`, (error as Error).message)
+      await sleep(1000) // Attente plus longue en cas d'erreur
+    }
+  }
+  return games.slice(0, totalGames)
+}
+const fetchGameDetails = async (gameId: number): Promise<RawgGameDetails | null> => {
+  try {
+    const response = await axios.get(`${RAWG_BASE_URL}/games/${gameId}`, {
+      params: { key: RAWG_API_KEY },
+    })
+    await sleep(DELAY_BETWEEN_REQUESTS)
+    return response.data
+  } catch (error) {
+    console.error(`❌ Erreur détails jeu ${gameId}:`, (error as Error).message)
+    return null
+  }
+}
+const upsertGenre = async (genreData: { id: number; name: string; image_background: string }) => {
+  try {
+    // Vérifier si le genre existe déjà
+    let genreResponse = await genre.findUnique({
+      where: { name: genreData.name },
+    })
+
+    if (!genreResponse) {
+      // Créer le media pour l'image du genre si disponible
+      let mediaId: number | null = null
+      if (genreData.image_background) {
+        const createdMediaId = await createMediaFromUrl(genreData.image_background, `genre_${genreData.name}`)
+        if (createdMediaId) {
+          mediaId = createdMediaId
+        }
+      }
+
+      genreResponse = await genre.create({
+        data: {
+          name: genreData.name,
+          image_background_id: mediaId,
+        },
+      })
+      console.log(`   ✅ Genre créé: ${genreData.name}`)
+    }
+
+    return genreResponse
+  } catch (error) {
+    console.error(`❌ Erreur upsert genre ${genreData.name}:`, (error as Error).message)
+    return null
+  }
+}
+const upsertPlatform = async (platformName: string) => {
+  try {
+    let platformResponse = await platform.findUnique({
+      where: { name: platformName },
+    })
+
+    if (!platformResponse) {
+      platformResponse = await platform.create({
+        data: { name: platformName },
+      })
+      console.log(`   ✅ Plateforme créée: ${platformName}`)
+    }
+
+    return platformResponse
+  } catch (error) {
+    console.error(`❌ Erreur upsert plateforme ${platformName}:`, (error as Error).message)
+    return null
+  }
+}
+const insertGame = async (gameBasic: RawgGame) => {
+  try {
+    console.log(`\n🎮 Traitement: ${gameBasic.name}`)
+
+    // Vérifier si le jeu existe déjà
+    const existingGame = await game.findUnique({
+      where: { name: gameBasic.name },
+    })
+
+    if (existingGame) {
+      console.log(`   ⏭️  Jeu déjà existant, ignoré`)
+      return existingGame
+    }
+
+    // Récupérer les détails complets
+    const gameDetails = await fetchGameDetails(gameBasic.id)
+    if (!gameDetails) {
+      console.log(`   ❌ Impossible de récupérer les détails`)
+      return null
+    }
+    // Créer le media pour l'image du jeu
+    let mediaId: number | null = null
+    if (gameDetails.background_image) {
+      mediaId = await createMediaFromUrl(gameDetails.background_image, gameBasic.name)
+      if (mediaId) {
+        console.log(`   📷 Media créé avec l'URL de l'image`)
+      }
+    }
+
+    // Créer le jeu
+    const gameResponse = await game.create({
+      data: {
+        name: gameBasic.name,
+        metacritic: gameDetails.metacritic || 0,
+        released_date: gameDetails.released ? new Date(gameDetails.released) : new Date(),
+        game_media_id: mediaId,
+      },
+    })
+
+    console.log(`   ✅ Jeu créé: ${gameResponse.name}`)
+
+    // Ajouter les genres
+    if (gameDetails.genres && gameDetails.genres.length > 0) {
+      for (const genreData of gameDetails.genres) {
+        const genreResponse = await upsertGenre(genreData)
+        if (genreResponse) {
+          await genreGame.create({
+            data: {
+              game_id: gameResponse.game_id,
+              genre_id: genreResponse.genre_id,
+            },
+          })
+        }
+      }
+      console.log(`   🏷️  ${gameDetails.genres.length} genres liés`)
+    }
+
+    // Ajouter les plateformes
+    if (gameDetails.platforms && gameDetails.platforms.length > 0) {
+      for (const platformData of gameDetails.platforms) {
+        const platform = await upsertPlatform(platformData.platform.name)
+        if (platform) {
+          await platformGame.create({
+            data: {
+              game_id: gameResponse.game_id,
+              platform_id: platform.platform_id,
+            },
+          })
+        }
+      }
+      console.log(`   🎯 ${gameDetails.platforms.length} plateformes liées`)
+    }
+
+    return gameResponse
+  } catch (error) {
+    console.error(`❌ Erreur insertion ${gameBasic.name}:`, (error as Error).message)
+    return null
+  }
+}
+
 const clearSeeding = async () => {
   console.log("🧹 Nettoyage de la base de données...")
   await prismaClient.$transaction(async (tx) => {
     await tx.challengeLike.deleteMany()
     await tx.participationLike.deleteMany()
     await tx.userRole.deleteMany()
-    await tx.typeGame.deleteMany()
+    await tx.genreGame.deleteMany()
     await tx.platformGame.deleteMany()
     // 2. Supprimer les entités qui dépendent d'autres
     await tx.participation.deleteMany()
@@ -58,7 +278,7 @@ const clearSeeding = async () => {
     await tx.user.deleteMany()
     await tx.game.deleteMany()
     await tx.role.deleteMany()
-    await tx.type.deleteMany()
+    await tx.genre.deleteMany()
     await tx.platform.deleteMany()
 
     // 4. ENFIN supprimer les médias (plus de références)
@@ -85,57 +305,66 @@ const seedPlatforms = async () => {
   }
   console.log(`Created ${totalInserted} platform`)
 }
-const seedType = async () => {
+const seedGenre = async () => {
   let url = `${RAWG_BASE_URL}/genres?key=${RAWG_API_KEY}`
   let totalInserted = 0
-  let mimetype = ""
-  let size = 0
+
   while (url) {
-    const { data } = await axios.get<typeAPI>(url)
+    try {
+      const { data } = await axios.get<typeAPI>(url)
+      const results = await Promise.all(
+        data.results.map(async (item) => {
+          let mimetype = "image/jpeg"
+          let size = 0
+          try {
+            const res = await fetch(item.image_background, {
+              method: "HEAD",
+              signal: AbortSignal.timeout(5000), // Timeout de 5s
+            })
+            const ct = res.headers.get("content-type")
+            const cl = res.headers.get("content-length")
+            if (ct) mimetype = ct
+            if (cl) size = parseInt(cl, 10)
+          } catch (err) {
+            console.warn(`HEAD request failed for ${item.name}:`, err)
+          }
 
-    await Promise.all(
-      data.results.map(async (item) => {
-        try {
-          const res = await fetch(item.image_background, { method: "HEAD" })
-          const ct = res.headers.get("content-type")
-          const cl = res.headers.get("content-length")
-
-          if (ct) mimetype = ct
-          if (cl) size = parseInt(cl, 10)
-        } catch (err) {
-          console.warn("HEAD request failed for", err)
-        }
-        return type.create({
-          data: {
-            name: item.name,
-            image_background: {
-              create: {
-                path: item.image_background,
-                size,
-                mimetype,
-                filename: `type-${item.name}-${Date.now()}.jpg`,
-                original_name: item.name.split("/").pop() || "image.jpg",
+          // Créer le type avec son media
+          return genre.create({
+            data: {
+              name: item.name,
+              image_background: {
+                create: {
+                  path: item.image_background,
+                  size,
+                  mimetype,
+                  filename: `type-${item.name.replace(/[^a-z0-9]/gi, "-").toLowerCase()}-${Date.now()}.jpg`,
+                  original_name: item.image_background.split("/").pop() || "image.jpg",
+                },
               },
             },
-          },
+            select: {
+              genre_id: true,
+              name: true,
+            },
+          })
         })
-      })
-    )
-    totalInserted += data.results.length
-    url = data.next
+      )
+
+      totalInserted += results.length
+
+      console.log(`Batch inserted:${data.results.length}`)
+
+      url = data.next
+    } catch (err) {
+      console.error("Error fetching page:", err)
+      break
+    }
   }
-  const x = await type.findFirst({
-    where: {
-      type_id: 115,
-    },
-    select: {
-      name: true,
-      image_background: {
-        select: {},
-      },
-    },
-  })
-  console.log(`Created ${x} types`)
+
+  console.log(`✅ Total created: ${totalInserted} types`)
+  const totalCount = await genre.count()
+  console.log(`📊 Total types in DB: ${totalCount}`)
 }
 const seedRoles = async () => {
   await prismaClient.role.createMany({
@@ -192,18 +421,13 @@ const SeedUsers = async () => {
     await prismaClient.user.create({
       data: {
         ...userUnique,
-        user_avatar: {
+        user_avatar_media: {
           create: {
-            media: {
-              create: {
-                filename: `user-${users[i].pseudo}-${Date.now()}.jpg`,
-                original_name: users[i].pseudo.split("/").pop() || "image.jpg",
-                mimetype: mimetype,
-                size: size,
-                path: avatars[i],
-                type: "IMAGE",
-              },
-            },
+            filename: `user-${users[i].pseudo}-${Date.now()}.jpg`,
+            original_name: users[i].pseudo.split("/").pop() || "image.jpg",
+            mimetype: mimetype,
+            size: size,
+            path: avatars[i],
           },
         },
         roles: {
@@ -215,114 +439,34 @@ const SeedUsers = async () => {
   console.log(`✅ Created ${users.length} users`)
 }
 const SeedGames = async () => {
-  const response = await fetch("https://www.freetogame.com/api/games")
-  const games: GameResponseApi[] = await response.json()
+  console.log("🚀 Début du seeding des jeux RAWG\n")
 
-  // Extraire tous les genres (split par virgule si plusieurs)
-  const allGenres = games.flatMap((g) => g.genre.split(",").map((genre) => genre.trim().toLowerCase()))
+  try {
+    // 1. Récupérer la liste des jeux
+    const gamesList = await fetchGameList(40, 500)
+    console.log(`\n✅ ${gamesList.length} jeux récupérés\n`)
 
-  const uniqueGenres = [...new Set(allGenres.filter((g) => g.length > 0))]
-  // Extraire tous les genres (split par virgule si plusieurs)
-  const allPlatforms = games.flatMap((g) => g.platform.split(",").map((platform) => platform.trim().toLowerCase()))
-  const uniquePlatforms = [...new Set(allPlatforms.filter((g) => g.length > 0))]
+    // 2. Insérer chaque jeu un par un
+    let successCount = 0
+    let errorCount = 0
 
-  console.log("📦 Seeding types and platforms...")
-  console.log(`Found ${uniqueGenres.length} unique genres`)
-  console.log(`Found ${uniquePlatforms.length} unique platforms`)
+    for (let i = 0; i < gamesList.length; i++) {
+      const game = gamesList[i]
+      console.log(`\n[${i + 1}/${gamesList.length}]`)
 
-  // Créer les types (genres)
-  await type.createMany({
-    data: uniqueGenres.map((name) => ({ name })),
-    skipDuplicates: true,
-  })
-
-  // Créer les platforms
-  await platform.createMany({
-    data: uniquePlatforms.map((name) => ({ name })),
-    skipDuplicates: true,
-  })
-
-  // Récupérer les types et platforms avec leurs IDs
-  const types = await type.findMany()
-  const platforms = await platform.findMany()
-
-  console.log("🎲 Creating games with relations...")
-
-  // Créer les games en batch
-  const batchSize = 50
-  for (let i = 0; i < games.length; i += batchSize) {
-    const batch = games.slice(i, i + batchSize)
-    const avatarUrl = games[i].thumbnail
-    let mimetype = "image/jpeg"
-    let size = 0
-    try {
-      const res = await fetch(avatarUrl, { method: "HEAD" })
-      const ct = res.headers.get("content-type")
-      const cl = res.headers.get("content-length")
-
-      if (ct) mimetype = ct
-      if (cl) size = parseInt(cl, 10)
-    } catch (err) {
-      console.warn("HEAD request failed for", avatarUrl, err)
+      const result = await insertGame(game)
+      if (result) {
+        successCount++
+      } else {
+        errorCount++
+      }
     }
 
-    await prismaClient.$transaction(
-      batch.map((gameData) => {
-        // Récupérer tous les types du jeu
-        const gameGenres = gameData.genre
-          .split(",")
-          .map((g) => g.trim().toLowerCase())
-          .filter((g) => g.length > 0)
-
-        const gameTypes = types.filter((type) => gameGenres.includes(type.name))
-        const gamePlatformArray = gameData.platform
-          .split(",")
-          .map((g) => g.trim().toLowerCase())
-          .filter((g) => g.length > 0)
-        const gamePlatform = platforms.filter((platform) => gamePlatformArray.includes(platform.name))
-
-        return game.create({
-          data: {
-            title: gameData.title,
-            description: gameData.short_description,
-            gameImages: {
-              create: {
-                media: {
-                  create: {
-                    filename: `game-${gameData.title}-${Date.now()}.jpg`,
-                    original_name: gameData.thumbnail.split("/").pop() || "image.jpg",
-                    mimetype: mimetype,
-                    size: size,
-                    path: gameData.thumbnail,
-                    type: "IMAGE",
-                  },
-                },
-              },
-            },
-            ...(gameTypes.length > 0 && {
-              type: {
-                create: gameTypes.map((t) => ({
-                  type: {
-                    connect: { type_id: t.type_id },
-                  },
-                })),
-              },
-            }),
-            ...(gamePlatform && {
-              platform: {
-                create: gamePlatform.map((plateform) => ({
-                  platform: {
-                    connect: { platform_id: plateform.platform_id },
-                  },
-                })),
-              },
-            }),
-          },
-        })
-      })
-    )
-
-    console.log(`✅ Created ${Math.min(i + batchSize, games.length)}/${games.length} games`)
+    console.log("\n\n🎉 Seeding terminé!")
+    console.log(`✅ ${successCount} jeux insérés avec succès`)
+    console.log(`❌ ${errorCount} erreurs`)
+  } catch (error) {
+    console.error("❌ Erreur fatale:", error)
   }
 }
 const SeedChallenges = async () => {
@@ -362,7 +506,7 @@ const SeedChallenges = async () => {
     "Aucune pause acceptée.",
   ]
 
-  const challenges = Array.from({ length: 20 }).map((_, index) => {
+  const challenges = Array.from({ length: 100 }).map((_, index) => {
     const randomGame = games[Math.floor(Math.random() * games.length)]
     const randomUser = users[Math.floor(Math.random() * users.length)]
     return {
@@ -397,23 +541,6 @@ const SeedParticipation = async () => {
     "https://www.youtube.com/watch?v=V-_O7nl0Ii0",
   ]
 
-  // 📡 Récupérer métadonnées en parallèle
-  const videoMetadata = await Promise.all(
-    sampleVideos.map(async (url) => {
-      try {
-        const res = await fetch(url, { method: "HEAD" })
-        return {
-          url,
-          mimetype: res.headers.get("content-type") || "video/mp4",
-          size: parseInt(res.headers.get("content-length") || "0", 10),
-        }
-      } catch (err) {
-        console.warn("HEAD request failed for", url)
-        return { url, mimetype: "video/mp4", size: 0 }
-      }
-    })
-  )
-
   // 🎲 Préparer toutes les participations avec un ID unique
   const participationsData = []
   let uniqueCounter = 0 // ← Compteur global
@@ -424,36 +551,27 @@ const SeedParticipation = async () => {
     for (let i = 0; i < nbParticipation; i++) {
       const randomUser = users[Math.floor(Math.random() * users.length)]
       const randomTitle = sampleTitles[Math.floor(Math.random() * sampleTitles.length)]
-      const randomVideoData = videoMetadata[Math.floor(Math.random() * videoMetadata.length)]
+      const randomVideoData = sampleVideos[Math.floor(Math.random() * sampleVideos.length)]
 
       participationsData.push({
         title: randomTitle,
         challenge_id: challenge.challenge_id,
         user_id: randomUser.user_id,
-        video: {
-          create: {
-            media: {
-              create: {
-                size: randomVideoData.size,
-                mimetype: randomVideoData.mimetype,
-                type: "VIDEO" as const,
-                path: randomVideoData.url,
-                original_name: randomVideoData.url,
-                filename: `participation-video-${Date.now()}-${uniqueCounter++}`, // ← Unique !
-              },
-            },
-          },
-        },
+        participation_url: randomVideoData,
       })
     }
   }
 
   // 💾 Insertion en masse (par batch)
-  const BATCH_SIZE = 50
-  for (let i = 0; i < participationsData.length; i += BATCH_SIZE) {
-    const batch = participationsData.slice(i, i + BATCH_SIZE)
-    await Promise.all(batch.map((data) => participation.create({ data })))
-  }
+  await participation.createMany({
+    data: participationsData.map((p) => ({
+      title: p.title,
+      challenge_id: p.challenge_id,
+      user_id: p.user_id,
+      participation_url: p.participation_url,
+    })),
+    skipDuplicates: true,
+  })
 
   console.log(`✅ Created ${participationsData.length} participations`)
 }
@@ -492,13 +610,13 @@ const SeedVoteUserParticipation = async () => {
   console.log(`✅ Created ${allVotes.length} participations likes`)
 }
 await clearSeeding()
-//await seedPlatforms()
-await seedType()
-// await seedRoles()
-// await SeedGames()
-// await SeedUsers()
-// await SeedChallenges()
-// await SeedParticipation()
-// await SeedVoteUserChallenge()
-// await SeedVoteUserParticipation()
+await seedPlatforms()
+await seedGenre()
+await seedRoles()
+await SeedGames()
+await SeedUsers()
+await SeedChallenges()
+await SeedParticipation()
+await SeedVoteUserChallenge()
+await SeedVoteUserParticipation()
 console.log("🎉 Seeding completed!")

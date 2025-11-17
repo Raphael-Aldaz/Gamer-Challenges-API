@@ -63,14 +63,14 @@ model UserRole {
 
 model Game {
   game_id Int @id @default(autoincrement())
-  title String @unique @db.VarChar(255)
-  description String @db.Text
-  
+  name String @unique @db.VarChar(255)
+  metacritic Int
+  released_date DateTime @db.Date()
   // Relations
   game_media Media? @relation(fields: [game_media_id], references: [media_id], onDelete: Cascade)
   game_media_id Int? @unique
   challenges Challenge[]
-  type TypeGame[]
+  genre GenreGame[]
   platform PlatformGame[]
   
   created_at DateTime @default(now())
@@ -168,7 +168,7 @@ model Media {
   // Relations
   user_madia User?
   game_media Game?
-  type_game_media Type?
+  type_game_media Genre?
 
   created_at DateTime @default(now())
   updated_at DateTime @updatedAt()
@@ -177,12 +177,12 @@ model Media {
   @@index([deleted_at])
   @@map("media")
 }
-model Type {
-  type_id Int @id @default(autoincrement())
+model Genre {
+  genre_id Int @id @default(autoincrement())
   name String @unique
   
   //Relation
-  game TypeGame[]
+  game GenreGame[]
   image_background Media? @relation( fields: [image_background_id], references: [media_id], onDelete: SetNull)
   image_background_id Int? @unique
   
@@ -192,19 +192,19 @@ model Type {
   deleted_at DateTime?
 
   @@index([deleted_at])
-  @@map("type")
+  @@map("genre")
 }
-model TypeGame {
+model GenreGame {
   game Game @relation(fields: [game_id], references: [game_id], onDelete: Cascade)
   game_id Int
-  type Type @relation(fields: [type_id],references: [type_id], onDelete: Cascade)
-  type_id Int
+  type Genre @relation(fields: [genre_id],references: [genre_id], onDelete: Cascade)
+  genre_id Int
 
   created_at DateTime @default(now())
-  @@id([game_id,type_id])
+  @@id([game_id,genre_id])
   @@index([game_id])
-  @@index([type_id])
-  @@map("type_game")
+  @@index([genre_id])
+  @@map("genre_game")
 }
 
 model Platform {
