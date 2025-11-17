@@ -1,0 +1,249 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+
+model Role {
+  role_id Int @id @default(autoincrement())
+  role_name String @unique @db.VarChar(50)
+  users UserRole[]
+  
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+
+  @@map("role")
+}
+
+model User {
+  user_id Int @id @default(autoincrement())
+  pseudo String @unique @db.VarChar(50)
+  email String @unique @db.VarChar(255)
+  password String @db.VarChar(255)
+  
+  // Relations
+  user_avatar_media Media? @relation(fields: [user_avatar_media_id], references: [media_id], onDelete: Cascade)
+  user_avatar_media_id Int? @unique
+  roles UserRole[]
+  challenges Challenge[]
+  participations Participation[]
+  likedChallenges ChallengeLike[]
+  likedParticipations ParticipationLike[]
+  refresh_tokens RefreshToken[]
+  
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+  @@index([user_id])
+  @@index([deleted_at])
+  @@map("user")
+}
+
+model UserRole {
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  user_id Int
+  role Role @relation(fields: [role_id], references: [role_id], onDelete: Cascade)
+  role_id Int
+  
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+  
+  @@id([user_id, role_id])
+  @@index([user_id])
+  @@index([role_id])
+  @@index([deleted_at])
+  @@map("user_role")
+}
+
+model Game {
+  game_id Int @id @default(autoincrement())
+  title String @unique @db.VarChar(255)
+  description String @db.Text
+  
+  // Relations
+  game_media Media? @relation(fields: [game_media_id], references: [media_id], onDelete: Cascade)
+  game_media_id Int? @unique
+  challenges Challenge[]
+  type TypeGame[]
+  platform PlatformGame[]
+  
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+  @@index([game_id])
+  @@index([deleted_at])
+  @@map("game")
+}
+
+model Challenge {
+  challenge_id Int @id @default(autoincrement())
+  title String @db.VarChar(255)
+  description  String @db.Text
+  rules String @db.Text
+  
+  // Relations
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  user_id Int
+  game Game @relation(fields: [game_id], references: [game_id], onDelete: Cascade)
+  game_id Int
+  participations Participation[]
+  likes ChallengeLike[]
+  
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+  
+  @@index([user_id])
+  @@index([game_id])
+  @@index([deleted_at])
+  @@index([game_id, deleted_at]) 
+  @@map("challenge")
+}
+model Participation {
+  participation_id Int @id @default(autoincrement())
+  title String @db.VarChar(255)
+  participation_url String @db.VarChar(255)
+
+  // Relations
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  user_id Int
+  challenge Challenge @relation(fields: [challenge_id], references: [challenge_id], onDelete: Cascade)
+  challenge_id Int
+  likes ParticipationLike[]
+  
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+  
+  @@index([user_id])
+  @@index([challenge_id])
+  @@index([deleted_at])
+  @@index([challenge_id, deleted_at])
+  @@map("participation")
+}
+
+
+model ChallengeLike {
+  user User @relation(fields: [user_id], references: [user_id])
+  user_id Int
+  challenge Challenge @relation(fields: [challenge_id], references: [challenge_id])
+  challenge_id Int
+  
+  created_at DateTime @default(now())
+  
+  @@id([user_id, challenge_id])
+  @@index([challenge_id])
+  @@index([user_id])
+  @@map("challenge_like")
+}
+
+model ParticipationLike {
+  user User @relation(fields: [user_id], references: [user_id])
+  user_id Int
+  participation Participation @relation(fields: [participation_id], references: [participation_id])
+  participation_id Int
+  
+  created_at DateTime @default(now())
+  
+  @@id([user_id, participation_id])
+  @@index([participation_id])
+  @@index([user_id])
+  
+  @@map("participation_like")
+}
+
+model Media {
+  media_id Int @id @default(autoincrement())
+  filename String @unique @db.VarChar(255)
+  original_name String @db.VarChar(255)
+  mimetype String @db.VarChar(100)
+  size Int
+  path String @db.VarChar(500)
+  // Relations
+  user_madia User?
+  game_media Game?
+  type_game_media Type?
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+  
+  @@index([deleted_at])
+  @@map("media")
+}
+model Type {
+  type_id Int @id @default(autoincrement())
+  name String @unique
+  
+  //Relation
+  game TypeGame[]
+  image_background Media? @relation( fields: [image_background_id], references: [media_id], onDelete: SetNull)
+  image_background_id Int? @unique
+  
+  
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+
+  @@index([deleted_at])
+  @@map("type")
+}
+model TypeGame {
+  game Game @relation(fields: [game_id], references: [game_id], onDelete: Cascade)
+  game_id Int
+  type Type @relation(fields: [type_id],references: [type_id], onDelete: Cascade)
+  type_id Int
+
+  created_at DateTime @default(now())
+  @@id([game_id,type_id])
+  @@index([game_id])
+  @@index([type_id])
+  @@map("type_game")
+}
+
+model Platform {
+  platform_id Int @id @default(autoincrement())
+  name String @unique
+  //Relation
+  game PlatformGame[]
+
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt()
+  deleted_at DateTime?
+  
+  @@index([deleted_at])
+  @@map("platform")
+}
+
+model PlatformGame {
+  game Game @relation(fields: [game_id], references: [game_id],onDelete: Cascade)
+  game_id Int
+  platform Platform @relation(fields: [platform_id], references: [platform_id], onDelete: Cascade)
+  platform_id Int
+
+  @@id([game_id, platform_id])
+  @@index([game_id])
+  @@index([platform_id])
+  @@map("platform_game")
+}
+model RefreshToken {
+  id Int @id @default(autoincrement())
+
+  token String @unique
+
+  user    User @relation(fields: [user_id], references: [user_id])
+  user_id Int
+
+  created_at  DateTime @default(now())
+  expired_at DateTime
+
+  @@index([user_id, expired_at])
+  @@index([expired_at])
+  @@map("refresh_token")
+}

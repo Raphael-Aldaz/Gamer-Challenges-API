@@ -1,0 +1,66 @@
+services:
+  gamer-challenges-db:
+    image: postgres:15-alpine
+    container_name: gamer-challenges-db
+    environment:
+      POSTGRES_USER: ${PG_USER}
+      POSTGRES_PASSWORD: ${PG_PASSWORD}
+      POSTGRES_DB: ${PG_DATABASE}
+      POSTGRES_INITDB_ARGS: "-E UTF8 --locale=C" # Encodage UTF8
+    ports:
+      - "${PG_PORT:-5433}:5432"
+    volumes:
+      - gamer-challenge-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d ${PG_DATABASE}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - gamerchallengeapi-network
+
+  gamer-challenges-api:
+    build: .
+    container_name: gamer-challenges-api
+    working_dir: /app
+    volumes:
+      - .:/app
+      - /app/node_modules
+    ports:
+      - "${PORT}:5000"
+    environment:
+      CI: true
+      NODE_ENV: development
+      PGHOST: gamer-challenges-db
+      PGPORT: 5432
+      PGUSER: ${PG_USER}
+      PGPASSWORD: ${PG_PASSWORD}
+      DATABASE_URL: postgresql://${PG_USER}:${PG_PASSWORD}@gamer-challenges-db:5432/${PG_DATABASE}
+      CHOKIDAR_USEPOLLING: true # Hot reload
+      WATCHPACK_POLLING: true # Pour Webpack
+    depends_on:
+      gamer-challenges-db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - gamerchallengeapi-network
+
+  gamer-challenge-adminer:
+    image: adminer:latest
+    container_name: gamer-challenges-adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      gamer-challenges-db:
+        condition: service_healthy
+    networks:
+      - gamerchallengeapi-network
+
+networks:
+  gamerchallengeapi-network:
+volumes:
+  gamer-challenge-postgres-data:
+  node_modules:
