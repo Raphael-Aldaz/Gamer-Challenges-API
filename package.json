@@ -18,7 +18,7 @@
     "db:dev": "pnpm run db:migrate:local && pnpm run db:generate",
     "======= Pour les tests ========": "========================",
     "test:unit": "tsx --test ./**/*.unit.test.ts",
-    "test:spec": "tsx --test --env-file=./test/config/.env.test --import ./test/config/global-setup.ts --experimental-test-isolation=none ./**/*.spec.test.ts",
+    "test:spec": "tsx --test --env-file=./src/test/config/.env.test --import ./src/test/config/global-setup.ts --experimental-test-isolation=none ./**/*.spec.test.ts",
     "test": "npm run test:unit && npm run test:spec"
   },
   "packageManager": "pnpm@10.18.1",
@@ -33,6 +33,7 @@
     "@types/node": "^24.0.12",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
+    "dotenv": "^17.2.3",
     "eslint": "^9.31.0",
     "globals": "^16.4.0",
     "prisma": "6.19.0",
