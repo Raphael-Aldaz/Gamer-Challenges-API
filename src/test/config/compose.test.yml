@@ -1,0 +1,9 @@
+services:
+  gamerChallenge_test_db:
+    image: postgres:17
+    environment:
+      - POSTGRES_USER=${PG_USER}
+      - POSTGRES_PASSWORD=${PG_PASSWORD}
+      - POSTGRES_DB=${PG_DATABASE}
+    ports:
+      - 5123:5432
