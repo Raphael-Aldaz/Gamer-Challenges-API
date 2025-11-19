@@ -130,9 +130,9 @@ model Participation {
 
 
 model ChallengeLike {
-  user User @relation(fields: [user_id], references: [user_id])
+  user User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
   user_id Int
-  challenge Challenge @relation(fields: [challenge_id], references: [challenge_id])
+  challenge Challenge @relation(fields: [challenge_id], references: [challenge_id],onDelete: Cascade)
   challenge_id Int
   
   created_at DateTime @default(now())
@@ -144,9 +144,9 @@ model ChallengeLike {
 }
 
 model ParticipationLike {
-  user User @relation(fields: [user_id], references: [user_id])
+  user User @relation(fields: [user_id], references: [user_id],onDelete: Cascade)
   user_id Int
-  participation Participation @relation(fields: [participation_id], references: [participation_id])
+  participation Participation @relation(fields: [participation_id], references: [participation_id],onDelete: Cascade)
   participation_id Int
   
   created_at DateTime @default(now())
@@ -237,7 +237,7 @@ model RefreshToken {
 
   token String @unique
 
-  user    User @relation(fields: [user_id], references: [user_id])
+  user    User @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
   user_id Int
 
   created_at  DateTime @default(now())

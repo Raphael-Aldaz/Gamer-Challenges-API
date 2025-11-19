@@ -443,7 +443,7 @@ const SeedGames = async () => {
 
   try {
     // 1. Récupérer la liste des jeux
-    const gamesList = await fetchGameList(40, 500)
+    const gamesList = await fetchGameList(GAMES_PER_REQUEST, GAMES_TO_FETCH)
     console.log(`\n✅ ${gamesList.length} jeux récupérés\n`)
 
     // 2. Insérer chaque jeu un par un
